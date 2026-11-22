@@ -10,3 +10,8 @@ Thumbs.db
 
 # секреты
 .env
+# большие исходные данные LGLN (скачиваются tools/fetch-lgln.mjs)
+data/lgln/
+
+# служебные файлы Python
+__pycache__/

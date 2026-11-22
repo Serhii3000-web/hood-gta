@@ -3,6 +3,7 @@
 // Вход:  data/osm-raw.json   Выход: js/map-data.js
 import fs from 'fs';
 import { LAT0, LON0, SOUTH, WEST, NORTH, EAST } from './map-area.mjs';
+import { loadLod2 } from './lod2.mjs';
 
 const raw = JSON.parse(fs.readFileSync('data/osm-raw.json', 'utf8'));
 
@@ -119,6 +120,108 @@ function buildingInfo(t, pts, id) {
   else if (t['building:levels']) { heightFromOsm++; h = parseFloat(t['building:levels']) * 2.8 + 1.5; }
   else h = { small: 2.6 + jitter * 0.6, house: 4.5 + jitter * 1.5, farm: 5.5 + jitter * 1.5 }[kind];
   return [Math.round(h * 10) / 10, kind];
+}
+
+// ================= Настоящие крыши (LGLN) =================
+// Контуры домов берём из OSM (они свежие, 2026) — они главные.
+// К каждому дому OSM ищем здания LoD2, которые с ним пересекаются, и берём от них
+// тип крыши, высоты и сами скаты. Цвет — из data/roof-colors.json (аэрофото).
+// Дом, которого нет в LoD2 (построен после 2018), получает двускатную крышу «по умолчанию».
+
+// Направление конька в градусах (0 = восток, 90 = юг): самое длинное ребро
+// между двумя верхними точками крыши.
+function ridgeDirection(roofs, ridge) {
+  let best = null, bestLen = 0;
+  for (const face of roofs) {
+    for (let i = 0; i < face.length; i++) {
+      const p = face[i], q = face[(i + 1) % face.length];
+      if (p[2] < ridge - 0.3 || q[2] < ridge - 0.3) continue;
+      const len = Math.hypot(q[0] - p[0], q[1] - p[1]);
+      if (len > bestLen) { bestLen = len; best = (Math.atan2(q[1] - p[1], q[0] - p[0]) * 180) / Math.PI; }
+    }
+  }
+  if (best === null || bestLen < 1) return null;
+  return Math.round(((best % 180) + 180) % 180);
+}
+
+const roofStats = { lod2: 0, covered: 0, guessed: 0, types: {} };
+
+function attachRoofs(out) {
+  const colors = fs.existsSync('data/roof-colors.json') ? JSON.parse(fs.readFileSync('data/roof-colors.json', 'utf8')) : {};
+  const parts = fs.existsSync('data/lgln') ? loadLod2('data/lgln', toXY) : [];
+  if (!parts.length) console.log('Нет LoD2 в data/lgln — крыши будут «по умолчанию». Скачать: node tools/fetch-lgln.mjs');
+
+  // Сетка 20×20 м: какие части LoD2 лежат в каждой клетке.
+  const CELL = 20;
+  const grid = new Map();
+  for (const p of parts) {
+    p.area = polygonArea(p.footprint);
+    const [x0, y0, x1, y1] = bboxOf(p.footprint);
+    for (let i = Math.floor(x0 / CELL); i <= Math.floor(x1 / CELL); i++)
+      for (let j = Math.floor(y0 / CELL); j <= Math.floor(y1 / CELL); j++) {
+        const k = i + ',' + j;
+        if (!grid.has(k)) grid.set(k, []);
+        grid.get(k).push(p);
+      }
+  }
+
+  // 1. Пересечение контуров: точки через каждый метр внутри дома OSM —
+  //    сколько из них попало в каждую часть LoD2 (≈ площадь пересечения в м²).
+  const overlaps = out.buildings.map((b) => {
+    const counts = new Map();
+    let total = 0;
+    const [x0, y0, x1, y1] = bboxOf(b.pts);
+    for (let x = Math.floor(x0) + 0.5; x < x1; x += 1) {
+      for (let y = Math.floor(y0) + 0.5; y < y1; y += 1) {
+        if (!pointInPoly(x, y, b.pts)) continue;
+        total++;
+        for (const p of grid.get(Math.floor(x / CELL) + ',' + Math.floor(y / CELL)) || []) {
+          if (pointInPoly(x, y, p.footprint)) counts.set(p, (counts.get(p) || 0) + 1);
+        }
+      }
+    }
+    return { counts, total };
+  });
+
+  // 2. Каждую часть LoD2 отдаём тому дому OSM, с которым она пересекается больше всего.
+  const owner = new Map();
+  out.buildings.forEach((b, i) => {
+    for (const [p, n] of overlaps[i].counts) {
+      if (n < 0.3 * p.area) continue; // задета краем — не считается
+      if (!owner.has(p) || owner.get(p).n < n) owner.set(p, { i, n });
+    }
+  });
+  const partsOf = out.buildings.map(() => []);
+  for (const [p, { i, n }] of owner) partsOf[i].push({ p, n });
+
+  // 3. Записываем крышу в каждый дом.
+  out.buildings.forEach((b, i) => {
+    b.c = colors[b.id] || null;
+    const mine = partsOf[i];
+    if (mine.length) {
+      const main = mine.reduce((a, c) => (c.n > a.n ? c : a)).p;
+      const ridge = Math.max(...mine.map(({ p }) => p.ridge ?? 0));
+      b.roof = { t: main.type, e: main.eave, r: ridge, d: ridgeDirection(main.roofs, main.ridge) };
+      // Скаты: каждый — плоский список [x, y, z, x, y, z, ...] в метрах.
+      b.f = mine.flatMap(({ p }) => p.roofs.map((face) => face.flat()));
+      b.h = ridge;
+      roofStats.lod2++;
+      roofStats.types[main.type] = (roofStats.types[main.type] || 0) + 1;
+    } else {
+      // Дом OSM целиком накрыт частями LoD2, которые достались соседнему дому OSM
+      // (например, OSM разделил дом на две половины, а LoD2 — нет). Его крышу рисует сосед.
+      let covered = 0;
+      for (const [p, n] of overlaps[i].counts) if (owner.has(p)) covered += n;
+      if (overlaps[i].total && covered >= 0.6 * overlaps[i].total) {
+        b.covered = true;
+        roofStats.covered++;
+      } else {
+        b.roof = { t: 'gable', e: null, r: null, d: null }; // по умолчанию
+        roofStats.guessed++;
+      }
+    }
+    delete b.id;
+  });
 }
 
 // ================= Посадка деревьев =================
@@ -257,7 +360,7 @@ for (const w of raw.elements) {
     // Последняя точка повторяет первую — для объёма она лишняя.
     const poly = pts.slice(0, -1);
     const [h, kind] = buildingInfo(t, poly, w.id);
-    out.buildings.push({ h, k: kind, pts: poly });
+    out.buildings.push({ id: w.id, h, k: kind, pts: poly });
   } else if (t.highway && ROAD_WIDTH[t.highway]) {
     out.roads.push({ w: ROAD_WIDTH[t.highway], name: t.name || '', pts });
   } else {
@@ -270,6 +373,7 @@ for (const w of raw.elements) {
 const AREA_ORDER = ['forest', 'farm', 'grass', 'yard', 'parking', 'water'];
 out.areas.sort((a, b) => AREA_ORDER.indexOf(a.kind) - AREA_ORDER.indexOf(b.kind));
 
+attachRoofs(out);
 plantTrees(out);
 
 // Широкие дороги рисуем последними, чтобы они были поверх тропинок.
@@ -283,5 +387,6 @@ fs.writeFileSync('js/map-data.js', js);
 
 console.log(`Дорог: ${out.roads.length}, домов: ${out.buildings.length}, зон: ${out.areas.length}, ` +
   `изгородей/заборов: ${out.barriers.length}, деревьев: ${out.trees.length}`);
-console.log(`Высота дома взята из OSM: ${heightFromOsm} из ${out.buildings.length}, остальные угаданы`);
+console.log(`Крыши: из LoD2 — ${roofStats.lod2}, накрыты соседом — ${roofStats.covered}, по умолчанию — ${roofStats.guessed}`);
+console.log("Типы крыш LoD2:", JSON.stringify(roofStats.types));
 console.log(`Размер файла: ${(js.length / 1024).toFixed(0)} КБ`);
