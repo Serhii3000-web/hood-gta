@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Hood — прототип</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #1b1d1a; overflow: hidden; }
+    canvas { display: block; width: 100vw; height: 100vh; cursor: grab; }
+    #hint {
+      position: fixed; left: 12px; bottom: 12px; padding: 6px 10px;
+      font: 14px sans-serif; color: #eee; background: rgba(0,0,0,.55); border-radius: 6px;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="hint">Мышь: тащи — двигать карту, колесо — масштаб</div>
+
+  <!-- Порядок важен: сначала данные карты, потом код, который их рисует -->
+  <script src="js/map-data.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
