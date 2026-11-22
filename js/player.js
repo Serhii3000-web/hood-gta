@@ -124,6 +124,68 @@ function pushOutOfWalls(p) {
   }
 }
 
+// ---------- Что под ногами ----------
+// Бег по газону и полю утомляет сильнее, по лесу — намного сильнее.
+const TERRAIN = {
+  road: { icon: '🛣️', name: 'дорога', drain: 1 },
+  grass: { icon: '🌱', name: 'газон', drain: (STAMINA_MAX / 15) / STAMINA_RUN }, // полная шкала за 15 с
+  forest: { icon: '🌲', name: 'лес', drain: (STAMINA_MAX / 3) / STAMINA_RUN }, // полная шкала за 3 с
+};
+
+// Дороги (любые, с тротуарами и тропинками) — по сетке 20×20 м, с полушириной.
+const ROAD_CELL = 20;
+const roadGrid = new Map();
+for (const r of window.MAP_DATA.roads) {
+  const half = r.w / 2 + (hasSidewalk(r.w) ? SIDEWALK_WIDTH : 0);
+  for (let i = 0; i < r.pts.length - 1; i++) {
+    const [ax, ay] = r.pts[i], [bx, by] = r.pts[i + 1];
+    const seg = { ax, ay, bx, by, half };
+    for (let gi = Math.floor((Math.min(ax, bx) - half) / ROAD_CELL); gi <= Math.floor((Math.max(ax, bx) + half) / ROAD_CELL); gi++) {
+      for (let gj = Math.floor((Math.min(ay, by) - half) / ROAD_CELL); gj <= Math.floor((Math.max(ay, by) + half) / ROAD_CELL); gj++) {
+        const k = gi + ',' + gj;
+        if (!roadGrid.has(k)) roadGrid.set(k, []);
+        roadGrid.get(k).push(seg);
+      }
+    }
+  }
+}
+
+// Рамки участков — чтобы быстро отбрасывать далёкие.
+for (const a of window.MAP_DATA.areas) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [x, y] of a.pts) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
+  a.box = [x0, y0, x1, y1];
+}
+
+function insidePoly(x, y, pts) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i], [xj, yj] = pts[j];
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+function terrainAt(x, y) {
+  // 1. Дорога, тротуар или тропинка.
+  for (const s of roadGrid.get(Math.floor(x / ROAD_CELL) + ',' + Math.floor(y / ROAD_CELL)) || []) {
+    const dx = s.bx - s.ax, dy = s.by - s.ay;
+    const t = Math.max(0, Math.min(1, ((x - s.ax) * dx + (y - s.ay) * dy) / (dx * dx + dy * dy || 1)));
+    if (Math.hypot(x - (s.ax + dx * t), y - (s.ay + dy * t)) <= s.half) return 'road';
+  }
+  // 2. Участки: что нарисовано сверху, то и под ногами. Лес рисуется самым нижним,
+  //    поэтому, если точка ещё и в поле/дворе/лугу, — это не лес.
+  let forest = false;
+  for (const a of window.MAP_DATA.areas) {
+    const [x0, y0, x1, y1] = a.box;
+    if (x < x0 || x > x1 || y < y0 || y > y1 || !insidePoly(x, y, a.pts)) continue;
+    if (a.holes && a.holes.some((h) => insidePoly(x, y, h))) continue; // поляна внутри леса
+    if (a.kind !== 'forest') return 'grass';
+    forest = true;
+  }
+  return forest ? 'forest' : 'grass';
+}
+
 // ---------- Игрок ----------
 const start = randomStreetPoint(window.MAP_DATA);
 const player = {
@@ -134,6 +196,7 @@ const player = {
   running: false,
   step: 0,           // фаза шага — для качания рук
   stamina: STAMINA_MAX,
+  terrain: 'road',   // что под ногами: road, grass, forest
   tired: false,      // одышка: бежать нельзя, пока шкала не дойдёт до 30
   effects: {},       // действующие плюшки: { energy: секунд осталось, shoes: ... }
 };
@@ -156,9 +219,12 @@ function updatePlayer(dt) {
   const wantsRun = keys.has('ShiftLeft') || keys.has('ShiftRight');
   player.running = player.moving && wantsRun && !player.tired;
 
-  // Выносливость: бег тратит, шаг и отдых восстанавливают.
+  player.terrain = terrainAt(player.x, player.y);
+
+  // Выносливость: бег тратит (на газоне и в лесу — больше), шаг и отдых восстанавливают.
   if (player.running) {
-    const drain = player.effects.energy ? STAMINA_RUN * 0.1 : STAMINA_RUN; // энергетик
+    let drain = STAMINA_RUN * TERRAIN[player.terrain].drain;
+    if (player.effects.energy) drain *= 0.1; // энергетик
     player.stamina = Math.max(0, player.stamina - drain * dt);
     if (player.stamina === 0) player.tired = true;
   } else {

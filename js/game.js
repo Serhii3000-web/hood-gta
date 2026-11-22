@@ -22,7 +22,8 @@ function drawHud(ctx, canvas) {
   ctx.textBaseline = 'alphabetic';
   ctx.textAlign = 'left';
   ctx.fillStyle = '#eee';
-  ctx.fillText(player.tired ? 'Одышка! Отдышись…' : 'Выносливость', x, y - 6);
+  const ground = TERRAIN[player.terrain];
+  ctx.fillText(player.tired ? 'Одышка! Отдышись…' : `Выносливость · ${ground.icon} ${ground.name}`, x, y - 6);
 
   // Действующие эффекты с оставшимися секундами — справа над шкалой.
   const active = Object.entries(player.effects).map(([n, s]) => `${PICKUP_TYPES[n].icon} ${Math.ceil(s)} с`);
