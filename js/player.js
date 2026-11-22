@@ -17,7 +17,7 @@ const RUN_SPEED = 4.5;       // м/с — бег (Shift)
 const TIRED_SPEED = 1.2;     // м/с — шаг при одышке
 
 const STAMINA_MAX = 100;
-const STAMINA_RUN = 12;      // тратится в секунду бега (полной шкалы хватает на ~8 с)
+const STAMINA_RUN = 4;       // тратится в секунду бега (полной шкалы хватает на ~25 с)
 const STAMINA_WALK = 8;      // восстанавливается в секунду шага
 const STAMINA_REST = 15;     // восстанавливается в секунду, если стоишь
 const STAMINA_RECOVER = 30;  // после одышки бежать можно, когда шкала дойдёт до 30

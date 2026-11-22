@@ -95,6 +95,15 @@ function drawMinimap(ctx, canvas) {
     ctx.fill();
     ctx.stroke();
   }
+  // Полиция — синие точки (красные, если сейчас видит тебя).
+  for (const c of cops) {
+    if (!near(c.x, c.y)) continue;
+    ctx.fillStyle = c.sees ? '#ff3b30' : c.mode === 'search' ? '#ff9f1a' : '#2f6bff';
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, 4.5 / k, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
   ctx.restore();
 
   // Игрок — белая стрелка по направлению взгляда.
@@ -126,21 +135,82 @@ function drawMinimap(ctx, canvas) {
   ctx.fillText('С', cx, cy - R + 14);
 }
 
+// Текст с тёмной обводкой — читается на любом фоне.
+function outlinedText(ctx, text, x, y, font, color) {
+  ctx.font = font;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.7)';
+  ctx.fillStyle = color;
+  ctx.strokeText(text, x, y);
+  ctx.fillText(text, x, y);
+}
+
+// Тревога: звёздочки, «ЗАМЕТИЛИ!», состояние погони, «ПОЙМАН!».
+function drawSpotted(ctx, canvas) {
+  const w = canvas.width, h = canvas.height;
+
+  // Тебя видят — красная пульсирующая рамка по краям экрана.
+  if (playerSpotted) {
+    const pulse = 0.5 + Math.sin(performance.now() / 120) * 0.5;
+    const edge = 70;
+    for (const [x0, y0, x1, y1] of [[0, 0, 0, edge], [0, h, 0, h - edge], [0, 0, edge, 0], [w, 0, w - edge, 0]]) {
+      const g = ctx.createLinearGradient(x0, y0, x1, y1);
+      g.addColorStop(0, `rgba(255, 30, 20, ${0.35 + pulse * 0.3})`);
+      g.addColorStop(1, 'rgba(255, 30, 20, 0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, w, h);
+    }
+  }
+
+  // Звёздочки тревоги: горящие — жёлтые, остальные — серые. Во время погони мигают.
+  if (policeAlert.level > 0) {
+    const blink = policeAlert.chasing && Math.floor(performance.now() / 400) % 2 === 0;
+    for (let i = 0; i < 3; i++) {
+      const on = i < policeAlert.level;
+      outlinedText(ctx, '★', w / 2 + (i - 1) * 34, 40, 'bold 32px sans-serif',
+        on ? (blink ? '#fff6a0' : '#ffcc00') : 'rgba(160, 160, 160, 0.6)');
+    }
+  }
+
+  if (playerSpotted) {
+    outlinedText(ctx, 'ЗАМЕТИЛИ!', w / 2, 80, 'bold 28px sans-serif', '#ff4433');
+  } else if (policeAlert.chasing) {
+    const L = ALERT_LEVELS[policeAlert.level];
+    const text = policeAlert.escapeTimer > 0
+      ? `Оторвался… отбой через ${Math.ceil(L.timeout - policeAlert.escapeTimer)} с`
+      : `Погоня! Уйди дальше ${L.radius} м от полиции`;
+    outlinedText(ctx, text, w / 2, 76, 'bold 18px sans-serif', '#ffd0c0');
+  }
+
+  if (caughtMessage.time > 0) {
+    ctx.globalAlpha = Math.min(1, caughtMessage.time);
+    outlinedText(ctx, 'ПОЙМАН!', w / 2, h / 2 - 40, 'bold 54px sans-serif', '#ff3322');
+    outlinedText(ctx, 'Новый старт', w / 2, h / 2, 'bold 20px sans-serif', '#fff');
+    ctx.globalAlpha = 1;
+  }
+}
+
 window.GAME = {
   zoom: 16, // пикселей на метр: на экране ~80×50 м вокруг игрока
   update(dt) {
     updatePlayer(dt);
     updatePickups(dt);
+    updatePolice(dt);
   },
   target: () => [player.x, player.y],
   // Рисуется в координатах карты, поверх домов и деревьев.
   draw(ctx, project) {
+    drawViewCones(ctx); // конусы — на земле, под всеми
     drawPickups(ctx);
     drawPlayerShadow(ctx);
     drawPlayer(ctx, project);
+    drawPolice(ctx, project);
   },
   // Рисуется в пикселях экрана, поверх всего.
   drawHud(ctx, canvas) {
+    drawSpotted(ctx, canvas);
     drawHud(ctx, canvas);
     drawMinimap(ctx, canvas);
   },
