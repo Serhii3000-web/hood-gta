@@ -1,4 +1,4 @@
-// Игрок: клавиатура, движение, случайный старт, рисование человечка.
+// Игрок: клавиатура, движение, выносливость, рисование человечка.
 
 // ---------- Клавиатура ----------
 // Храним, какие клавиши сейчас нажаты. e.code — физическая клавиша,
@@ -11,29 +11,40 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => keys.delete(e.code));
 window.addEventListener('blur', () => keys.clear()); // переключился на другое окно — отпускаем всё
 
-const WALK_SPEED = 1.6; // м/с — обычный шаг
-const RUN_SPEED = 4.5;  // м/с — бег (Shift)
+// ---------- Скорости и выносливость ----------
+const WALK_SPEED = 1.6;      // м/с — обычный шаг
+const RUN_SPEED = 4.5;       // м/с — бег (Shift)
+const TIRED_SPEED = 1.2;     // м/с — шаг при одышке
 
-// ---------- Случайный старт ----------
-// Выбираем случайную точку на улице (не на тропинке и не в доме).
-// Длинные улицы выпадают чаще — шанс пропорционален длине участка.
-function randomStart(map) {
-  const segments = [];
-  let total = 0;
-  for (const r of map.roads) {
-    if (r.w < 4 || r.w > 10) continue; // без тропинок и без автобана
-    for (let i = 0; i < r.pts.length - 1; i++) {
-      const [x1, y1] = r.pts[i], [x2, y2] = r.pts[i + 1];
-      const len = Math.hypot(x2 - x1, y2 - y1);
-      total += len;
-      segments.push({ x1, y1, x2, y2, end: total });
+const STAMINA_MAX = 100;
+const STAMINA_RUN = 12;      // тратится в секунду бега (полной шкалы хватает на ~8 с)
+const STAMINA_WALK = 8;      // восстанавливается в секунду шага
+const STAMINA_REST = 15;     // восстанавливается в секунду, если стоишь
+const STAMINA_RECOVER = 30;  // после одышки бежать можно, когда шкала дойдёт до 30
+
+// ---------- Случайная точка на улице ----------
+// Улица (не тропинка и не автобан) не дальше 60 м от дома — то есть в посёлке.
+// Длинные улицы выпадают чаще: шанс пропорционален длине участка.
+let streetCache = null;
+function randomStreetPoint(map) {
+  if (!streetCache) {
+    const segments = [];
+    let total = 0;
+    for (const r of map.roads) {
+      if (r.w < 4 || r.w > 10) continue;
+      for (let i = 0; i < r.pts.length - 1; i++) {
+        const [x1, y1] = r.pts[i], [x2, y2] = r.pts[i + 1];
+        total += Math.hypot(x2 - x1, y2 - y1);
+        segments.push({ x1, y1, x2, y2, end: total });
+      }
     }
+    const houses = map.buildings.map((b) => [
+      b.pts.reduce((s, p) => s + p[0], 0) / b.pts.length,
+      b.pts.reduce((s, p) => s + p[1], 0) / b.pts.length,
+    ]);
+    streetCache = { segments, total, houses };
   }
-  // Центры домов — чтобы старт был в посёлке, а не на дороге в поле или за краем карты.
-  const houses = map.buildings.map((b) => [
-    b.pts.reduce((s, p) => s + p[0], 0) / b.pts.length,
-    b.pts.reduce((s, p) => s + p[1], 0) / b.pts.length,
-  ]);
+  const { segments, total, houses } = streetCache;
   const nearHouse = (x, y) => houses.some(([hx, hy]) => Math.hypot(hx - x, hy - y) < 60);
 
   // Пробуем случайные точки, пока не попадём в посёлок.
@@ -48,17 +59,26 @@ function randomStart(map) {
 }
 
 // ---------- Игрок ----------
-const start = randomStart(window.MAP_DATA);
+const start = randomStreetPoint(window.MAP_DATA);
 const player = {
   x: start.x,
   y: start.y,
-  angle: 0,      // куда смотрит, радианы (0 — на восток)
+  angle: 0,          // куда смотрит, радианы (0 — на восток)
   moving: false,
   running: false,
-  step: 0,       // фаза шага — для качания рук
+  step: 0,           // фаза шага — для качания рук
+  stamina: STAMINA_MAX,
+  tired: false,      // одышка: бежать нельзя, пока шкала не дойдёт до 30
+  effects: {},       // действующие плюшки: { energy: секунд осталось, shoes: ... }
 };
 
 function updatePlayer(dt) {
+  // Эффекты плюшек тикают и заканчиваются.
+  for (const name of Object.keys(player.effects)) {
+    player.effects[name] -= dt;
+    if (player.effects[name] <= 0) delete player.effects[name];
+  }
+
   // Направление по клавишам: вверх по экрану — это север (y меньше).
   let dx = 0, dy = 0;
   if (keys.has('KeyW') || keys.has('ArrowUp')) dy -= 1;
@@ -67,12 +87,27 @@ function updatePlayer(dt) {
   if (keys.has('KeyD') || keys.has('ArrowRight')) dx += 1;
 
   player.moving = dx !== 0 || dy !== 0;
-  player.running = keys.has('ShiftLeft') || keys.has('ShiftRight');
+  const wantsRun = keys.has('ShiftLeft') || keys.has('ShiftRight');
+  player.running = player.moving && wantsRun && !player.tired;
+
+  // Выносливость: бег тратит, шаг и отдых восстанавливают.
+  if (player.running) {
+    const drain = player.effects.energy ? STAMINA_RUN * 0.1 : STAMINA_RUN; // энергетик
+    player.stamina = Math.max(0, player.stamina - drain * dt);
+    if (player.stamina === 0) player.tired = true;
+  } else {
+    const regen = player.moving ? STAMINA_WALK : STAMINA_REST;
+    player.stamina = Math.min(STAMINA_MAX, player.stamina + regen * dt);
+    if (player.tired && player.stamina >= STAMINA_RECOVER) player.tired = false;
+  }
+
   if (!player.moving) return;
+
+  let speed = player.running ? RUN_SPEED : player.tired ? TIRED_SPEED : WALK_SPEED;
+  if (player.running && player.effects.shoes) speed *= 1.3; // кроссовки
 
   // По диагонали не быстрее, чем прямо: делим на длину вектора.
   const len = Math.hypot(dx, dy);
-  const speed = player.running ? RUN_SPEED : WALK_SPEED;
   player.x += (dx / len) * speed * dt;
   player.y += (dy / len) * speed * dt;
   player.angle = Math.atan2(dy, dx);
@@ -97,12 +132,13 @@ function drawPlayer(ctx, project) {
     ctx.fill();
   }
 
-  // Плечи (куртка) — эллипс поперёк направления.
+  // Плечи (куртка) — эллипс поперёк направления. При одышке плечи «ходят».
+  const breath = player.tired ? 1 + Math.sin(performance.now() / 120) * 0.08 : 1;
   ctx.fillStyle = '#c0392b';
   ctx.strokeStyle = '#4a1510';
   ctx.lineWidth = 0.03;
   ctx.beginPath();
-  ctx.ellipse(0, 0, 0.14, 0.25, 0, 0, Math.PI * 2);
+  ctx.ellipse(0, 0, 0.14 * breath, 0.25 * breath, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.stroke();
 
@@ -121,14 +157,3 @@ function drawPlayerShadow(ctx) {
   ctx.ellipse(player.x + 0.4, player.y + 0.15, 0.55, 0.45, 0, 0, Math.PI * 2);
   ctx.fill();
 }
-
-// Связь с главным циклом (js/main.js) и видом (js/view-3d.js).
-window.GAME = {
-  zoom: 16, // пикселей на метр: на экране ~80×50 м вокруг игрока
-  update: updatePlayer,
-  target: () => [player.x, player.y],
-  draw(ctx, project) {
-    drawPlayerShadow(ctx);
-    drawPlayer(ctx, project);
-  },
-};

@@ -100,6 +100,8 @@ function frame(now) {
   view.draw(ctx, camera, canvas);
   ctx.restore();
 
+  if (window.GAME && window.GAME.drawHud) window.GAME.drawHud(ctx, canvas);
+
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
