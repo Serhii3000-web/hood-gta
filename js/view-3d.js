@@ -44,6 +44,16 @@ window.VIEW = {
     map.trees.forEach(([x, y], i) => { if (visible(x, y)) items.push({ tree: i, d: dist2(x, y) }); });
     items.sort((p, q) => q.d - p.d);
 
+    // Персонажи и плюшки (игра) — ДО домов и деревьев: кроны выше человека
+    // и закрывают его сверху. Дома его не закроют: камера висит прямо над игроком,
+    // а стены в перспективе наклоняются от него.
+    let focus = null;
+    if (window.GAME) {
+      window.GAME.draw(ctx, project);
+      const [fx, fy] = window.GAME.target();
+      focus = project(fx, fy, 1.6); // где игрок на экране
+    }
+
     ctx.lineJoin = 'round';
     const treeScale = camH / (camH - TREE_HEIGHT);
     for (const it of items) {
@@ -51,6 +61,10 @@ window.VIEW = {
         const [tx, ty] = map.trees[it.tree];
         const info = map.treeInfo[it.tree];
         const [x, y] = project(tx, ty, TREE_HEIGHT);
+        const r = info.r * treeScale;
+        // Крона над игроком — полупрозрачная: видно себя сквозь листву.
+        const overPlayer = focus && Math.hypot(x - focus[0], y - focus[1]) < r + 0.6;
+        if (overPlayer) ctx.globalAlpha = 0.45;
         // Ствол от земли до кроны — без него крона «висит в воздухе».
         ctx.strokeStyle = '#4a3a2a';
         ctx.lineWidth = 0.5;
@@ -58,7 +72,8 @@ window.VIEW = {
         ctx.moveTo(tx, ty);
         ctx.lineTo(x, y);
         ctx.stroke();
-        drawCrown(ctx, x, y, info.r * treeScale, info.shade);
+        drawCrown(ctx, x, y, r, info.shade);
+        ctx.globalAlpha = 1;
         continue;
       }
       const b = it.b;
@@ -90,15 +105,12 @@ window.VIEW = {
         // Плоская крыша
         tracePath(ctx, roof);
         ctx.closePath();
-        ctx.fillStyle = b.roof;
+        ctx.fillStyle = b.roofColor;
         ctx.fill();
         ctx.lineWidth = 0.25;
         ctx.stroke();
       }
     }
-
-    // Персонажи игры (игрок, позже полиция) — поверх карты.
-    if (window.GAME) window.GAME.draw(ctx, project);
   },
 };
 

@@ -197,7 +197,8 @@ function prepareMap(map) {
     else b.roofHSL = [25, 30, 28 + r * 6];                         // коричневая
     // Настоящий цвет крыши с аэрофото (если есть) вместо угаданного.
     if (b.c) b.roofHSL = hexToHsl(b.c);
-    b.roof = roofShade(b, 0);
+    // Цвет — в отдельное поле: в b.roof лежат данные о крыше (тип, высоты, конёк).
+    b.roofColor = roofShade(b, 0);
 
     // Настоящая крыша из LoD2: готовые скаты.
     if (b.f) {
@@ -336,7 +337,7 @@ function drawRoofTop(ctx, b) {
   ctx.lineWidth = 0.3;
   tracePath(ctx, b.pts);
   ctx.closePath();
-  ctx.fillStyle = b.roof;
+  ctx.fillStyle = b.roofColor;
   ctx.fill();
   ctx.stroke();
 }

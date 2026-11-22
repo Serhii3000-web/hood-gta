@@ -58,6 +58,72 @@ function randomStreetPoint(map) {
   return { x: 0, y: 0 }; // запасной вариант — центр карты
 }
 
+// ---------- Столкновения ----------
+// Препятствия — отрезки: стены домов, заборы, стены, живые изгороди.
+// Раскладываем их по сетке 10×10 м, чтобы проверять только ближайшие.
+const PLAYER_RADIUS = 0.4;   // м — «толщина» человечка для столкновений
+const MAX_SUBSTEP = 0.15;    // м — движение за кадр режем на такие кусочки
+const WALL_CELL = 10;
+const BARRIER_HALF = { hedge: 0.7, fence: 0.1, wall: 0.15 }; // полутолщина, м
+
+const wallGrid = new Map();
+function addWall(ax, ay, bx, by, half) {
+  const seg = { ax, ay, bx, by, half };
+  const pad = half + PLAYER_RADIUS;
+  for (let i = Math.floor((Math.min(ax, bx) - pad) / WALL_CELL); i <= Math.floor((Math.max(ax, bx) + pad) / WALL_CELL); i++) {
+    for (let j = Math.floor((Math.min(ay, by) - pad) / WALL_CELL); j <= Math.floor((Math.max(ay, by) + pad) / WALL_CELL); j++) {
+      const k = i + ',' + j;
+      if (!wallGrid.has(k)) wallGrid.set(k, []);
+      wallGrid.get(k).push(seg);
+    }
+  }
+}
+// Дом с моделью LoD2 рисуется по ней — значит, и упираться надо в её стены
+// (низ нарисованных стен). Дом без LoD2 — по контуру из OpenStreetMap.
+prepareMap(window.MAP_DATA); // из render.js: готовит стены LoD2 (b.walls)
+for (const b of window.MAP_DATA.buildings) {
+  if (b.walls) {
+    for (const w of b.walls) addWall(w.p[0], w.p[1], w.q[0], w.q[1], 0);
+    continue;
+  }
+  for (let i = 0; i < b.pts.length; i++) {
+    const [ax, ay] = b.pts[i], [bx, by] = b.pts[(i + 1) % b.pts.length];
+    addWall(ax, ay, bx, by, 0);
+  }
+}
+for (const br of window.MAP_DATA.barriers) {
+  for (let i = 0; i < br.pts.length - 1; i++) {
+    const [ax, ay] = br.pts[i], [bx, by] = br.pts[i + 1];
+    addWall(ax, ay, bx, by, BARRIER_HALF[br.kind] || 0.1);
+  }
+}
+
+// Если круг игрока залез в стену — выталкиваем его наружу по кратчайшему пути.
+// Так при движении под углом к стене человечек скользит вдоль неё.
+function pushOutOfWalls(p) {
+  for (let pass = 0; pass < 3; pass++) {
+    let moved = false;
+    const list = wallGrid.get(Math.floor(p.x / WALL_CELL) + ',' + Math.floor(p.y / WALL_CELL)) || [];
+    for (const s of list) {
+      // Ближайшая к игроку точка отрезка.
+      const dx = s.bx - s.ax, dy = s.by - s.ay;
+      const len2 = dx * dx + dy * dy || 1;
+      const t = Math.max(0, Math.min(1, ((p.x - s.ax) * dx + (p.y - s.ay) * dy) / len2));
+      const cx = s.ax + dx * t, cy = s.ay + dy * t;
+      const ox = p.x - cx, oy = p.y - cy;
+      const dist = Math.hypot(ox, oy);
+      const minDist = PLAYER_RADIUS + s.half;
+      if (dist >= minDist) continue;
+      if (dist < 1e-6) continue; // ровно на линии — не знаем, куда толкать; пропускаем
+      const push = minDist - dist;
+      p.x += (ox / dist) * push;
+      p.y += (oy / dist) * push;
+      moved = true;
+    }
+    if (!moved) break;
+  }
+}
+
 // ---------- Игрок ----------
 const start = randomStreetPoint(window.MAP_DATA);
 const player = {
@@ -108,8 +174,15 @@ function updatePlayer(dt) {
 
   // По диагонали не быстрее, чем прямо: делим на длину вектора.
   const len = Math.hypot(dx, dy);
-  player.x += (dx / len) * speed * dt;
-  player.y += (dy / len) * speed * dt;
+  const dist = speed * dt;
+  // Двигаемся маленькими шагами и после каждого выталкиваемся из стен —
+  // иначе на бегу можно «проскочить» тонкий забор за один кадр.
+  const steps = Math.max(1, Math.ceil(dist / MAX_SUBSTEP));
+  for (let i = 0; i < steps; i++) {
+    player.x += ((dx / len) * dist) / steps;
+    player.y += ((dy / len) * dist) / steps;
+    pushOutOfWalls(player);
+  }
   player.angle = Math.atan2(dy, dx);
   player.step += dt * speed * 3.2; // чем быстрее идёшь, тем чаще шаги
 }
