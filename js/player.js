@@ -98,12 +98,20 @@ for (const br of window.MAP_DATA.barriers) {
   }
 }
 
-// Если круг игрока залез в стену — выталкиваем его наружу по кратчайшему пути.
-// Так при движении под углом к стене человечек скользит вдоль неё.
-function pushOutOfWalls(p) {
+// Если круг (игрок, полицейский, угол машины) залез в стену — выталкиваем его наружу
+// по кратчайшему пути. Так при движении под углом к стене он скользит вдоль неё.
+// radius — радиус круга; по умолчанию — человек.
+function pushOutOfWalls(p, radius = PLAYER_RADIUS) {
   for (let pass = 0; pass < 3; pass++) {
     let moved = false;
-    const list = wallGrid.get(Math.floor(p.x / WALL_CELL) + ',' + Math.floor(p.y / WALL_CELL)) || [];
+    // Клетки сетки, которые задевает круг (для человека — обычно одна).
+    const list = [];
+    for (let i = Math.floor((p.x - radius) / WALL_CELL); i <= Math.floor((p.x + radius) / WALL_CELL); i++) {
+      for (let j = Math.floor((p.y - radius) / WALL_CELL); j <= Math.floor((p.y + radius) / WALL_CELL); j++) {
+        const cell = wallGrid.get(i + ',' + j);
+        if (cell) list.push(...cell);
+      }
+    }
     for (const s of list) {
       // Ближайшая к игроку точка отрезка.
       const dx = s.bx - s.ax, dy = s.by - s.ay;
@@ -112,7 +120,7 @@ function pushOutOfWalls(p) {
       const cx = s.ax + dx * t, cy = s.ay + dy * t;
       const ox = p.x - cx, oy = p.y - cy;
       const dist = Math.hypot(ox, oy);
-      const minDist = PLAYER_RADIUS + s.half;
+      const minDist = radius + s.half;
       if (dist >= minDist) continue;
       if (dist < 1e-6) continue; // ровно на линии — не знаем, куда толкать; пропускаем
       const push = minDist - dist;
@@ -197,6 +205,7 @@ const player = {
   step: 0,           // фаза шага — для качания рук
   stamina: STAMINA_MAX,
   terrain: 'road',   // что под ногами: road, grass, forest
+  inCar: null,       // машина, в которой сидит игрок (или null — пешком)
   tired: false,      // одышка: бежать нельзя, пока шкала не дойдёт до 30
   effects: {},       // действующие плюшки: { energy: секунд осталось, shoes: ... }
 };
@@ -206,6 +215,15 @@ function updatePlayer(dt) {
   for (const name of Object.keys(player.effects)) {
     player.effects[name] -= dt;
     if (player.effects[name] <= 0) delete player.effects[name];
+  }
+
+  // В машине ногами не ходим (машиной управляет js/driving.js), а отдыхаем.
+  if (player.inCar) {
+    player.moving = false;
+    player.running = false;
+    player.stamina = Math.min(STAMINA_MAX, player.stamina + STAMINA_REST * dt);
+    if (player.tired && player.stamina >= STAMINA_RECOVER) player.tired = false;
+    return;
   }
 
   // Направление по клавишам: вверх по экрану — это север (y меньше).

@@ -132,17 +132,20 @@ function rayLength(x, y, angle, maxLen) {
   return best;
 }
 
+// Дальность обзора: машина заметнее человека — её видно в 1,6 раза дальше.
+const viewRange = () => VIEW_RANGE * (player.inCar ? 1.6 : 1);
+
 // Видит ли полицейский игрока.
 function copSeesPlayer(c) {
   const dx = player.x - c.x, dy = player.y - c.y;
   const dist = Math.hypot(dx, dy);
-  if (dist > VIEW_RANGE) return false;
+  if (dist > viewRange()) return false;
   // Угол между взглядом и направлением на игрока.
   let diff = Math.atan2(dy, dx) - c.look;
   diff = Math.atan2(Math.sin(diff), Math.cos(diff)); // в пределах -π..π
   if (Math.abs(diff) > VIEW_HALF_ANGLE) return false;
   if (rayLength(c.x, c.y, Math.atan2(dy, dx), dist) < dist - 0.3) return false; // стена между
-  if (underTree(player.x, player.y)) return false; // спрятался в листве
+  if (!player.inCar && underTree(player.x, player.y)) return false; // спрятался в листве (машину листва не скроет)
   return true;
 }
 
@@ -336,6 +339,12 @@ function updatePolice(dt) {
   let spotter = null;
 
   for (const c of cops) {
+    // Сбит машиной — несколько секунд приходит в себя: не ходит и не смотрит.
+    if (c.stun > 0) {
+      c.stun -= dt;
+      c.sees = false;
+      continue;
+    }
     if (c.mode === 'patrol') patrolStep(c, dt);
     else if (c.mode === 'chase') moveToward(c, player.x, player.y, CHASE_SPEED, dt, true);
     else if (c.mode === 'search') searchStep(c, dt);
@@ -366,11 +375,17 @@ function updatePolice(dt) {
   }
 
   if (policeAlert.chasing) {
-    // Поймали?
-    for (const c of cops) {
-      if ((c.mode === 'chase' || c.mode === 'search') && Math.hypot(c.x - player.x, c.y - player.y) < CATCH_DISTANCE) {
-        caught();
-        return;
+    // Поймали? Пешком — подбежал вплотную. В машине — только если она стоит
+    // и полицейский у двери (вытащат из машины).
+    const car = player.inCar;
+    if (!car || car.speed < 1) {
+      for (const c of cops) {
+        if (c.stun > 0 || (c.mode !== 'chase' && c.mode !== 'search')) continue;
+        const d = car ? distToCar(car, c.x, c.y) : Math.hypot(c.x - player.x, c.y - player.y);
+        if (d < (car ? 0.8 : CATCH_DISTANCE)) {
+          caught();
+          return;
+        }
       }
     }
     // Оторвался: дальше радиуса от всех преследователей и никто не видит — тикает таймер отбоя.
@@ -402,13 +417,15 @@ function drawViewCones(ctx) {
     if (Math.hypot(c.x - player.x, c.y - player.y) > 120) continue; // далеко — не рисуем
     ctx.beginPath();
     ctx.moveTo(c.x, c.y);
+    if (c.stun > 0) continue; // оглушён — не смотрит
+    const range = viewRange(); // в машине тебя видно дальше — конус больше
     for (let i = 0; i <= VIEW_RAYS; i++) {
       const a = c.look - VIEW_HALF_ANGLE + (2 * VIEW_HALF_ANGLE * i) / VIEW_RAYS;
-      const len = rayLength(c.x, c.y, a, VIEW_RANGE);
+      const len = rayLength(c.x, c.y, a, range);
       ctx.lineTo(c.x + Math.cos(a) * len, c.y + Math.sin(a) * len);
     }
     ctx.closePath();
-    const g = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, VIEW_RANGE);
+    const g = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, range);
     const col = c.sees ? '255, 60, 40' : c.mode === 'search' ? '255, 160, 40' : '255, 240, 150';
     g.addColorStop(0, `rgba(${col}, 0.45)`);
     g.addColorStop(1, `rgba(${col}, 0.05)`);

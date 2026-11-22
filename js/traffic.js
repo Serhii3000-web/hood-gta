@@ -92,8 +92,11 @@ function obstacleAhead(c) {
     if (side < sideGap) best = Math.min(best, ahead);
   };
   // Машины — только попутные (иначе на перекрёстке двое могут ждать друг друга вечно).
+  // Твою машину не считаем здесь — она проверяется ниже как «игрок».
+  // Брошенные машины тоже пропускаем: иначе за ними выстроится вечная очередь.
   for (const o of cars) {
-    if (o !== c && Math.cos(o.angle - c.angle) > 0.3) check(o.x, o.y, 1.6);
+    if (o === c || o.driver === 'player' || o.parked) continue;
+    if (Math.cos(o.angle - c.angle) > 0.3) check(o.x, o.y, 1.6);
   }
   check(player.x, player.y, 2.0);
   for (const p of cops) {
@@ -131,6 +134,8 @@ function mustYield(c) {
 
 function updateTraffic(dt) {
   for (const c of cars) {
+    // Твоя машина (ведёшь ты — js/driving.js) и брошенные сами не ездят.
+    if (c.driver === 'player' || c.parked) continue;
     // Уступаем на перекрёстке — «препятствие» в точке остановки перед ним.
     let gap = obstacleAhead(c) - CAR_LENGTH;
     if (mustYield(c)) {
@@ -186,6 +191,7 @@ function distToCar(c, x, y) {
 
 // Сбила: если едет быстрее 3 м/с и задела игрока — отбрасывает в сторону, выносливость в ноль.
 function hitPlayer(c) {
+  if (player.inCar) return; // в машине — не сбить
   if (c.speed < 3 || distToCar(c, player.x, player.y) > PLAYER_RADIUS) return;
   const fx = Math.cos(c.angle), fy = Math.sin(c.angle);
   const dx = player.x - c.x, dy = player.y - c.y;
@@ -202,6 +208,7 @@ function hitPlayer(c) {
 
 // Сквозь машину не пройти: выталкиваем игрока из кузова.
 function pushPlayerOutOfCars() {
+  if (player.inCar) return;
   for (const c of cars) {
     if (Math.abs(c.x - player.x) > 5 || Math.abs(c.y - player.y) > 5) continue;
     const fx = Math.cos(c.angle), fy = Math.sin(c.angle);

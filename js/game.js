@@ -353,6 +353,7 @@ window.GAME = {
     if (game.state !== 'play') return; // игра окончена — всё замирает
     game.time += dt;
     updatePlayer(dt);
+    updateDriving(dt);
     updateTraffic(dt);
     updatePickups(dt);
     updatePolice(dt);
@@ -366,8 +367,11 @@ window.GAME = {
     drawGoal(ctx, project);
     drawPickups(ctx);
     drawCars(ctx, project);
-    drawPlayerShadow(ctx);
-    drawPlayer(ctx, project);
+    drawRunners(ctx, project);
+    if (!player.inCar) { // в машине человечка не видно
+      drawPlayerShadow(ctx);
+      drawPlayer(ctx, project);
+    }
     drawPolice(ctx, project);
   },
   // Рисуется в пикселях экрана, поверх всего.
@@ -376,5 +380,6 @@ window.GAME = {
     drawHud(ctx, canvas);
     drawMinimap(ctx, canvas);
     drawGoalPointer(ctx, canvas);
+    drawDrivingHud(ctx, canvas);
   },
 };
