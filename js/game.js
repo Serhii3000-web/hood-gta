@@ -95,6 +95,15 @@ function drawMinimap(ctx, canvas) {
     ctx.fill();
     ctx.stroke();
   }
+  // Машины — маленькие белые точки.
+  ctx.fillStyle = '#f4f4f4';
+  for (const c of cars) {
+    if (!near(c.x, c.y)) continue;
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, 2.5 / k, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   // Полиция — синие точки (красные, если сейчас видит тебя).
   for (const c of cops) {
     if (!near(c.x, c.y)) continue;
@@ -105,6 +114,26 @@ function drawMinimap(ctx, canvas) {
     ctx.stroke();
   }
   ctx.restore();
+
+  // Цель — зелёный флажок. Если она дальше края мини-карты — прижат к краю в её сторону.
+  {
+    const gx = (goal.x - player.x) * k, gy = (goal.y - player.y) * k;
+    const d = Math.hypot(gx, gy);
+    const s = d > R - 10 ? (R - 10) / d : 1;
+    ctx.fillStyle = '#2ecc40';
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(cx + gx * s, cy + gy * s, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.font = 'bold 10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#fff';
+    ctx.fillText('⚑', cx + gx * s, cy + gy * s + 1);
+    ctx.textBaseline = 'alphabetic';
+  }
 
   // Игрок — белая стрелка по направлению взгляда.
   ctx.save();
@@ -183,27 +212,159 @@ function drawSpotted(ctx, canvas) {
       : `Погоня! Уйди дальше ${L.radius} м от полиции`;
     outlinedText(ctx, text, w / 2, 76, 'bold 18px sans-serif', '#ffd0c0');
   }
+}
 
-  if (caughtMessage.time > 0) {
-    ctx.globalAlpha = Math.min(1, caughtMessage.time);
-    outlinedText(ctx, 'ПОЙМАН!', w / 2, h / 2 - 40, 'bold 54px sans-serif', '#ff3322');
-    outlinedText(ctx, 'Новый старт', w / 2, h / 2, 'bold 20px sans-serif', '#fff');
-    ctx.globalAlpha = 1;
+// ================= Цель, победа и проигрыш =================
+
+const GOAL_MIN_DISTANCE = 500; // м — цель не ближе этого от старта
+const GOAL_RADIUS = 3;         // м — подойти ближе, и ты на месте
+const RECORD_KEY = 'hood-best-time';
+
+// Цель — случайная точка на улице подальше от старта.
+const goal = (() => {
+  let best = null;
+  for (let i = 0; i < 300; i++) {
+    const p = randomStreetPoint(window.MAP_DATA);
+    const d = Math.hypot(p.x - player.x, p.y - player.y);
+    if (d >= GOAL_MIN_DISTANCE) return p;
+    if (!best || d > best.d) best = { ...p, d }; // запасной вариант — самая дальняя из найденных
   }
+  return best;
+})();
+
+const game = {
+  state: 'play',  // 'play' — играем, 'won' — победа, 'caught' — поймали
+  time: 0,        // секунд с начала
+  maxLevel: 0,    // самый высокий уровень тревоги за игру
+};
+
+const formatTime = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
+// Рекорд хранится в браузере. Чтение/запись могут не работать (приватный режим) — тогда без рекорда.
+function readRecord() {
+  try { return Number(localStorage.getItem(RECORD_KEY)) || null; } catch { return null; }
+}
+function saveRecord(t) {
+  try { localStorage.setItem(RECORD_KEY, String(t)); } catch { /* без рекорда */ }
+}
+
+// Конец игры: окно поверх экрана с итогами и кнопкой «Ещё раз».
+function gameOver(result) {
+  if (game.state !== 'play') return;
+  game.state = result;
+  keys.clear();
+
+  const stars = '★'.repeat(game.maxLevel) + '☆'.repeat(3 - game.maxLevel);
+  let html;
+  if (result === 'won') {
+    const record = readRecord();
+    const isRecord = !record || game.time < record;
+    if (isRecord) saveRecord(game.time);
+    html = `<h1 style="color:#2ecc40">ПОБЕДА!</h1>
+      <p>Время: <b>${formatTime(game.time)}</b>${isRecord ? ' — <b style="color:#ffcc00">новый рекорд!</b>' : ''}</p>
+      ${!isRecord ? `<p>Рекорд: ${formatTime(record)}</p>` : ''}
+      <p>Тревога (максимум): <span style="color:#ffcc00">${stars}</span></p>`;
+  } else {
+    html = `<h1 style="color:#ff3322">ПОЙМАН!</h1>
+      <p>Продержался: <b>${formatTime(game.time)}</b></p>
+      <p>До цели оставалось: <b>${Math.round(Math.hypot(goal.x - player.x, goal.y - player.y))} м</b></p>
+      <p>Тревога (максимум): <span style="color:#ffcc00">${stars}</span></p>`;
+  }
+
+  const box = document.createElement('div');
+  box.style.cssText = `position:fixed; left:50%; top:50%; transform:translate(-50%,-50%);
+    background:rgba(15,18,14,.92); color:#eee; font:18px sans-serif; text-align:center;
+    padding:24px 40px; border-radius:12px; box-shadow:0 8px 30px rgba(0,0,0,.6); max-width:calc(100vw - 32px);`;
+  box.innerHTML = html + `<button id="again" style="margin-top:12px; font:bold 18px sans-serif; padding:10px 28px;
+    border:0; border-radius:8px; background:#2ecc40; color:#fff; cursor:pointer">Ещё раз (Enter)</button>`;
+  document.body.appendChild(box);
+  // Новая игра — просто перезагрузка страницы: новый старт, новая цель, новая полиция.
+  document.getElementById('again').onclick = () => location.reload();
+  window.addEventListener('keydown', (e) => { if (e.code === 'Enter') location.reload(); });
+}
+
+// Цель на земле: пульсирующий зелёный круг и флажок на шесте.
+function drawGoal(ctx, project) {
+  const pulse = 0.5 + Math.sin(performance.now() / 300) * 0.5;
+  ctx.fillStyle = `rgba(46, 204, 64, ${0.25 + pulse * 0.2})`;
+  ctx.strokeStyle = '#2ecc40';
+  ctx.lineWidth = 0.3;
+  ctx.beginPath();
+  ctx.arc(goal.x, goal.y, GOAL_RADIUS, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  // Шест от земли до 4 м (с перспективой) и флажок наверху.
+  const [tx, ty] = project(goal.x, goal.y, 4);
+  ctx.strokeStyle = '#ddd';
+  ctx.lineWidth = 0.15;
+  ctx.beginPath();
+  ctx.moveTo(goal.x, goal.y);
+  ctx.lineTo(tx, ty);
+  ctx.stroke();
+  ctx.fillStyle = '#2ecc40';
+  ctx.beginPath();
+  ctx.moveTo(tx, ty);
+  ctx.lineTo(tx + 1.6, ty + 0.5);
+  ctx.lineTo(tx, ty + 1);
+  ctx.closePath();
+  ctx.fill();
+}
+
+// Время сверху слева и стрелка на цель у края экрана, если цель не видна.
+function drawGoalPointer(ctx, canvas) {
+  const w = canvas.width, h = canvas.height;
+  outlinedText(ctx, `⏱ ${formatTime(game.time)}`, 60, 34, 'bold 20px sans-serif', '#fff');
+
+  const dist = Math.hypot(goal.x - player.x, goal.y - player.y);
+  // Где цель на экране (камера — из js/main.js).
+  const sx = w / 2 + (goal.x - camera.x) * camera.zoom;
+  const sy = h / 2 + (goal.y - camera.y) * camera.zoom;
+  const margin = 40;
+  if (sx > margin && sx < w - margin && sy > margin && sy < h - margin) return; // цель на экране
+
+  // Точка на краю экрана в сторону цели.
+  const dx = sx - w / 2, dy = sy - h / 2;
+  const s = Math.min((w / 2 - margin) / Math.abs(dx || 1e-9), (h / 2 - margin) / Math.abs(dy || 1e-9));
+  const ax = w / 2 + dx * s, ay = h / 2 + dy * s;
+  ctx.save();
+  ctx.translate(ax, ay);
+  ctx.rotate(Math.atan2(dy, dx));
+  ctx.fillStyle = '#2ecc40';
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(16, 0);
+  ctx.lineTo(-10, 11);
+  ctx.lineTo(-4, 0);
+  ctx.lineTo(-10, -11);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+  // Расстояние — чуть ближе к центру от стрелки.
+  const tx = w / 2 + dx * s * 0.9, ty = h / 2 + dy * s * 0.9 + 6;
+  outlinedText(ctx, `${Math.round(dist)} м`, tx, ty, 'bold 16px sans-serif', '#b8ffb8');
 }
 
 window.GAME = {
   zoom: 16, // пикселей на метр: на экране ~80×50 м вокруг игрока
   update(dt) {
+    if (game.state !== 'play') return; // игра окончена — всё замирает
+    game.time += dt;
     updatePlayer(dt);
+    updateTraffic(dt);
     updatePickups(dt);
     updatePolice(dt);
+    game.maxLevel = Math.max(game.maxLevel, policeAlert.level);
+    if (Math.hypot(goal.x - player.x, goal.y - player.y) < GOAL_RADIUS) gameOver('won');
   },
   target: () => [player.x, player.y],
   // Рисуется в координатах карты, поверх домов и деревьев.
   draw(ctx, project) {
     drawViewCones(ctx); // конусы — на земле, под всеми
+    drawGoal(ctx, project);
     drawPickups(ctx);
+    drawCars(ctx, project);
     drawPlayerShadow(ctx);
     drawPlayer(ctx, project);
     drawPolice(ctx, project);
@@ -213,5 +374,6 @@ window.GAME = {
     drawSpotted(ctx, canvas);
     drawHud(ctx, canvas);
     drawMinimap(ctx, canvas);
+    drawGoalPointer(ctx, canvas);
   },
 };

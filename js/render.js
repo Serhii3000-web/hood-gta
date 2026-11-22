@@ -10,12 +10,19 @@ const COLORS = {
   parking: '#6e6e6b',
   road: '#6b6b68',
   roadEdge: '#4f4f4c',
+  sidewalk: '#a9a59c',   // тротуар — светлая плитка
+  curb: '#7d7a72',       // бордюр по внешнему краю тротуара
   hedge: '#2f5f27',
   fence: '#b0a58c',
   wall: '#a29a90',
   building: '#8a7f73',
   buildingEdge: '#3f3a34',
 };
+
+// Тротуары: ширина с каждой стороны улицы и у каких улиц они есть
+// (жилые, сквозные, главные — 5–10 м; у проездов во дворы, тропинок и автобана нет).
+const SIDEWALK_WIDTH = 1.8;
+const hasSidewalk = (w) => w >= 5 && w <= 10;
 
 // Поля летом разные: пшеница, рапс после цветения, кукуруза, свежая пахота.
 const FIELD_COLORS = ['#8fa848', '#b9ad5c', '#c9b86a', '#7f9e3f', '#a39a55', '#6f9440', '#9c8a5a'];
@@ -248,9 +255,27 @@ function drawGround(ctx, map) {
     ctx.fill('evenodd');
   }
 
-  // 2. Дороги: сначала тёмная кайма чуть шире, потом сама дорога
+  // 2. Тротуары: вдоль улиц шириной 5–10 м, по SIDEWALK_WIDTH с каждой стороны.
+  //    Рисуем широкую светлую полосу под улицей — дорога потом ляжет поверх,
+  //    и по бокам останутся два тротуара.
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
+  for (const r of map.roads) {
+    if (!hasSidewalk(r.w)) continue;
+    tracePath(ctx, r.pts);
+    ctx.strokeStyle = COLORS.curb;
+    ctx.lineWidth = r.w + SIDEWALK_WIDTH * 2 + 0.4;
+    ctx.stroke();
+  }
+  for (const r of map.roads) {
+    if (!hasSidewalk(r.w)) continue;
+    tracePath(ctx, r.pts);
+    ctx.strokeStyle = COLORS.sidewalk;
+    ctx.lineWidth = r.w + SIDEWALK_WIDTH * 2;
+    ctx.stroke();
+  }
+
+  // 3. Дороги: сначала тёмная кайма чуть шире, потом сама дорога
   for (const r of map.roads) {
     tracePath(ctx, r.pts);
     ctx.strokeStyle = COLORS.roadEdge;
@@ -264,7 +289,7 @@ function drawGround(ctx, map) {
     ctx.stroke();
   }
 
-  // 3. Изгороди (толстые зелёные), заборы и стены (тонкие)
+  // 4. Изгороди (толстые зелёные), заборы и стены (тонкие)
   for (const b of map.barriers) {
     tracePath(ctx, b.pts);
     ctx.strokeStyle = COLORS[b.kind];

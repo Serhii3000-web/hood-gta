@@ -1,7 +1,7 @@
 // Полиция: патруль, конус обзора, тревога и погоня.
 // Дома, заборы и изгороди закрывают обзор. Под кроной дерева игрока не видно.
 
-const POLICE_COUNT = 500;
+const POLICE_COUNT = 250;
 const PATROL_SPEED = 1.4;              // м/с — спокойный патруль
 const CHASE_SPEED = 4.0;               // м/с — бег за игроком (игрок бегает 4,5)
 const SEARCH_SPEED = 2.8;              // м/с — прочёсывание улиц
@@ -22,21 +22,37 @@ const CALM_DOWN_TIME = 30; // с спокойствия после погони 
 // ---------- Сеть улиц для патруля и поиска ----------
 // Узлы — точки улиц, рёбра — участки между ними. Улицы OSM сходятся
 // в общих точках, поэтому одинаковые координаты = перекрёсток.
-const roadGraph = new Map(); // ключ "x,y" → { x, y, next: [ключи соседей] }
+const roadGraph = new Map(); // ключ "x,y" → { x, y, next: [ключи соседей], width: {сосед: ширина улицы} }
 {
   const key = (p) => p[0].toFixed(1) + ',' + p[1].toFixed(1);
   for (const r of window.MAP_DATA.roads) {
     if (r.w < 4 || r.w > 10) continue; // улицы, без тропинок и автобана
     for (let i = 0; i < r.pts.length; i++) {
       const k = key(r.pts[i]);
-      if (!roadGraph.has(k)) roadGraph.set(k, { x: r.pts[i][0], y: r.pts[i][1], next: [] });
+      if (!roadGraph.has(k)) roadGraph.set(k, { x: r.pts[i][0], y: r.pts[i][1], next: [], width: {} });
       if (i > 0) {
         const prev = key(r.pts[i - 1]);
         roadGraph.get(k).next.push(prev);
         roadGraph.get(prev).next.push(k);
+        roadGraph.get(k).width[prev] = r.w;
+        roadGraph.get(prev).width[k] = r.w;
       }
     }
   }
+}
+
+// Точка на правом тротуаре участка from → to (у конца участка или в доле k от начала).
+// Тротуар (js/render.js) — полоса SIDEWALK_WIDTH за краем улицы; идём по её середине.
+// Где тротуара нет (узкий проезд) — у правого края проезда.
+function sidewalkPoint(fromKey, toKey, k = 1) {
+  const A = roadGraph.get(fromKey), B = roadGraph.get(toKey);
+  const dx = B.x - A.x, dy = B.y - A.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const w = A.width[toKey] || 6;
+  const off = w / 2 + (hasSidewalk(w) ? SIDEWALK_WIDTH / 2 : 0.6);
+  // Справа по ходу движения: на экране (y вниз) это (-dy, dx).
+  const nx = -dy / len, ny = dx / len;
+  return { x: A.x + dx * k + nx * off, y: A.y + dy * k + ny * off };
 }
 
 function nearestNode(x, y) {
@@ -140,7 +156,6 @@ const policeAlert = {
   lastSeen: null,   // где игрока видели последний раз
 };
 let playerSpotted = false;   // видит ли игрока хоть один полицейский
-const caughtMessage = { time: 0 };
 
 // ---------- Полицейские ----------
 // Режимы: patrol — гуляет по улицам; chase — видит игрока и бежит к нему;
@@ -185,7 +200,7 @@ const cops = [];
     // Случайно — в какую сторону по улице пойдёт.
     const [from, to] = Math.random() < 0.5 ? [edge.a, edge.b] : [edge.b, edge.a];
     const A = roadGraph.get(from), B = roadGraph.get(to);
-    const x = A.x + (B.x - A.x) * k, y = A.y + (B.y - A.y) * k;
+    const { x, y } = sidewalkPoint(from, to, k); // сразу на тротуаре
     if (Math.hypot(x - player.x, y - player.y) < 60) continue; // не у старта игрока
     cops.push({
       x, y,
@@ -222,9 +237,12 @@ function moveToward(c, tx, ty, speed, dt, collide) {
 
 function patrolStep(c, dt) {
   let move = PATROL_SPEED * dt;
-  // Идём к следующему узлу; дошли — выбираем, куда дальше.
-  while (move > 0) {
-    const target = roadGraph.get(c.to);
+  // Идём по правому тротуару к концу участка; дошли — выбираем, куда дальше.
+  // На перекрёстке путь срезает угол к тротуару следующей улицы.
+  for (let guard = 0; move > 0 && guard < 10; guard++) {
+    const node = roadGraph.get(c.to);
+    // После возвращения из погони «откуда» не известно — идём прямо в точку улицы.
+    const target = c.from ? sidewalkPoint(c.from, c.to) : node;
     const dx = target.x - c.x, dy = target.y - c.y;
     const d = Math.hypot(dx, dy);
     if (d > move) {
@@ -237,8 +255,9 @@ function patrolStep(c, dt) {
       c.y = target.y;
       move -= d;
       // На перекрёстке — любой путь, кроме обратного (если есть выбор).
-      const options = target.next.filter((k) => k !== c.from);
-      const choices = options.length ? options : target.next;
+      // В тупике разворот — и он сам перейдёт на тротуар другой стороны.
+      const options = node.next.filter((k) => k !== c.from);
+      const choices = options.length ? options : node.next;
       c.from = c.to;
       c.to = choices[Math.floor(Math.random() * choices.length)];
     }
@@ -313,7 +332,6 @@ function endChase() {
 }
 
 function updatePolice(dt) {
-  caughtMessage.time = Math.max(0, caughtMessage.time - dt);
   playerSpotted = false;
   let spotter = null;
 
@@ -372,21 +390,9 @@ function updatePolice(dt) {
   }
 }
 
-// Поймали: сообщение и новый старт подальше от полиции.
+// Поймали — игра окончена (окно «ПОЙМАН!» — в js/game.js).
 function caught() {
-  caughtMessage.time = 3;
-  let p;
-  let tries = 0;
-  do { p = randomStreetPoint(window.MAP_DATA); tries++; }
-  while (tries < 50 && cops.some((c) => Math.hypot(c.x - p.x, c.y - p.y) < 100));
-  player.x = p.x;
-  player.y = p.y;
-  player.stamina = STAMINA_MAX;
-  player.tired = false;
-  policeAlert.level = 0;
-  policeAlert.calm = 0;
-  policeAlert.unseen = 99;
-  endChase();
+  gameOver('caught');
 }
 
 // Конус обзора на земле: лучи обрываются на стенах.
