@@ -9,7 +9,25 @@ function drawHud(ctx, canvas) {
   // Шкала выносливости: зелёная → жёлтая → красная.
   const k = player.stamina / STAMINA_MAX;
   ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
-  ctx.fillRect(x - 4, y - 22, W + 8, H + 28);
+  ctx.fillRect(x - 4, y - 46, W + 8, H + 52);
+
+  // Здоровье: красная полоска над выносливостью.
+  const hpK = player.hp / HP_MAX;
+  ctx.fillStyle = '#333';
+  ctx.fillRect(x + 52, y - 40, W - 52, 10);
+  ctx.fillStyle = hpK > 0.3 ? '#d63031' : `rgba(255, 40, 30, ${0.6 + Math.sin(performance.now() / 120) * 0.4})`;
+  ctx.fillRect(x + 52, y - 40, (W - 52) * hpK, 10);
+  ctx.font = 'bold 13px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = '#fff';
+  ctx.fillText(`❤ ${Math.ceil(player.hp)}`, x, y - 30);
+  // Патроны — справа над плашкой, если есть пистолет.
+  if (combat.ammo > 0) {
+    ctx.textAlign = 'right';
+    ctx.fillText(`🔫 ${combat.ammo}`, x + W, y - 52);
+    ctx.textAlign = 'left';
+  }
   ctx.fillStyle = '#333';
   ctx.fillRect(x, y, W, H);
   ctx.fillStyle = player.tired ? '#c0392b' : `hsl(${k * 110}, 70%, 45%)`;
@@ -96,10 +114,17 @@ function drawMinimap(ctx, canvas) {
     ctx.fill();
     ctx.stroke();
   }
-  // Машины — маленькие белые точки.
-  ctx.fillStyle = '#f4f4f4';
+  // Машины — маленькие белые точки; полицейские — синие квадраты (в погоне мигают).
+  const flash = Math.floor(performance.now() / 200) % 2 === 0;
   for (const c of cars) {
     if (!near(c.x, c.y)) continue;
+    if (c.police) {
+      ctx.fillStyle = c.pursuit && flash ? '#8fd0ff' : '#1f4fa8';
+      ctx.fillRect(c.x - 4 / k, c.y - 4 / k, 8 / k, 8 / k);
+      ctx.strokeRect(c.x - 4 / k, c.y - 4 / k, 8 / k, 8 / k);
+      continue;
+    }
+    ctx.fillStyle = '#f4f4f4';
     ctx.beginPath();
     ctx.arc(c.x, c.y, 2.5 / k, 0, Math.PI * 2);
     ctx.fill();
@@ -175,6 +200,26 @@ function outlinedText(ctx, text, x, y, font, color) {
   ctx.fillStyle = color;
   ctx.strokeText(text, x, y);
   ctx.fillText(text, x, y);
+}
+
+// Урон: красная вспышка всего экрана и всплывающие «−5» над героем.
+function drawDamage(ctx, canvas, dt) {
+  const w = canvas.width, h = canvas.height;
+  if (damageFx.flash > 0) {
+    ctx.fillStyle = `rgba(255, 0, 0, ${damageFx.flash})`;
+    ctx.fillRect(0, 0, w, h);
+    damageFx.flash = Math.max(0, damageFx.flash - dt);
+  }
+  for (const p of damageFx.popups) {
+    // Где герой на экране (камера — из js/main.js); число всплывает вверх и тает.
+    const sx = w / 2 + (p.x - camera.x) * camera.zoom;
+    const sy = h / 2 + (p.y - camera.y) * camera.zoom - (1 - p.time) * 40 - 30;
+    ctx.globalAlpha = Math.max(0, p.time);
+    outlinedText(ctx, p.text, sx, sy, 'bold 26px sans-serif', '#ff4433');
+    ctx.globalAlpha = 1;
+    p.time -= dt;
+  }
+  damageFx.popups = damageFx.popups.filter((p) => p.time > 0);
 }
 
 // Тревога: звёздочки, «ЗАМЕТИЛИ!», состояние погони, «ПОЙМАН!».
@@ -357,6 +402,8 @@ window.GAME = {
     updateTraffic(dt);
     updatePickups(dt);
     updatePolice(dt);
+    updatePoliceCars(dt);
+    updateCombat(dt);
     game.maxLevel = Math.max(game.maxLevel, policeAlert.level);
     if (Math.hypot(goal.x - player.x, goal.y - player.y) < GOAL_RADIUS) gameOver('won');
   },
@@ -365,6 +412,8 @@ window.GAME = {
   draw(ctx, project) {
     drawViewCones(ctx); // конусы — на земле, под всеми
     drawGoal(ctx, project);
+    drawCorpses(ctx);
+    drawDroppedPistols(ctx);
     drawPickups(ctx);
     drawCars(ctx, project);
     drawRunners(ctx, project);
@@ -373,9 +422,15 @@ window.GAME = {
       drawPlayer(ctx, project);
     }
     drawPolice(ctx, project);
+    drawTracers(ctx);
   },
   // Рисуется в пикселях экрана, поверх всего.
   drawHud(ctx, canvas) {
+    // Время между кадрами для анимаций интерфейса.
+    const now = performance.now();
+    const dt = Math.min(0.1, (now - (this.lastHud || now)) / 1000);
+    this.lastHud = now;
+    drawDamage(ctx, canvas, dt);
     drawSpotted(ctx, canvas);
     drawHud(ctx, canvas);
     drawMinimap(ctx, canvas);

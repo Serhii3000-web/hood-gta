@@ -8,7 +8,8 @@ const SEARCH_SPEED = 2.8;              // м/с — прочёсывание у�
 const VIEW_RANGE = 25;                 // м — дальность обзора
 const VIEW_HALF_ANGLE = (35 * Math.PI) / 180; // половина угла конуса (весь конус 70°)
 const VIEW_RAYS = 30;                  // сколько лучей для рисования конуса
-const CATCH_DISTANCE = 1.0;            // м — ближе этого: поймали
+const CATCH_DISTANCE = 1.0;            // м — ближе этого: достал рукой
+const COP_DAMAGE = 5;                  // HP за удар пешего полицейского
 
 // Уровни тревоги: радиус погони, через сколько секунд отбой, сколько полицейских гонится.
 const ALERT_LEVELS = [
@@ -365,32 +366,41 @@ function updatePolice(dt) {
     }
   }
 
+  // Полицейские машины в погоне тоже видят игрока (js/policecars.js).
+  if (!playerSpotted) {
+    const carSpotter = policeCarSpotter();
+    if (carSpotter) { playerSpotted = true; spotter = carSpotter; }
+  }
+
   if (playerSpotted) {
     policeAlert.lastSeen = { x: player.x, y: player.y };
     raiseAlert(spotter);
-    if (spotter.mode !== 'chase') spotter.mode = 'chase';
+    if (!spotter.police && spotter.mode !== 'chase') spotter.mode = 'chase'; // пеший — бежит за тобой
     policeAlert.unseen = 0;
   } else {
     policeAlert.unseen += dt;
   }
 
   if (policeAlert.chasing) {
-    // Поймали? Пешком — подбежал вплотную. В машине — только если она стоит
-    // и полицейский у двери (вытащат из машины).
+    // Удары: пешком — полицейский подбежал вплотную; в машине — только если она стоит
+    // и полицейский у двери. Каждый бьёт на COP_DAMAGE не чаще раза в секунду.
     const car = player.inCar;
+    for (const c of cops) c.hitCooldown = Math.max(0, (c.hitCooldown || 0) - dt);
     if (!car || car.speed < 1) {
       for (const c of cops) {
-        if (c.stun > 0 || (c.mode !== 'chase' && c.mode !== 'search')) continue;
+        if (c.stun > 0 || c.hitCooldown > 0 || (c.mode !== 'chase' && c.mode !== 'search')) continue;
         const d = car ? distToCar(car, c.x, c.y) : Math.hypot(c.x - player.x, c.y - player.y);
         if (d < (car ? 0.8 : CATCH_DISTANCE)) {
-          caught();
-          return;
+          c.hitCooldown = 1;
+          damagePlayer(COP_DAMAGE);
+          if (game.state !== 'play') return; // здоровье кончилось
         }
       }
     }
     // Оторвался: дальше радиуса от всех преследователей и никто не видит — тикает таймер отбоя.
     const L = ALERT_LEVELS[policeAlert.level];
-    const chasers = cops.filter((c) => c.mode === 'chase' || c.mode === 'search');
+    const chasers = cops.filter((c) => c.mode === 'chase' || c.mode === 'search')
+      .concat(policeCars.filter((c) => c.pursuit)); // и полицейские машины в погоне
     const far = chasers.every((c) => Math.hypot(c.x - player.x, c.y - player.y) > L.radius);
     if (!playerSpotted && far) {
       policeAlert.escapeTimer += dt;

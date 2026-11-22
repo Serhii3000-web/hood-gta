@@ -206,9 +206,21 @@ const player = {
   stamina: STAMINA_MAX,
   terrain: 'road',   // что под ногами: road, grass, forest
   inCar: null,       // машина, в которой сидит игрок (или null — пешком)
+  hp: 100,           // здоровье; 0 — проигрыш
   tired: false,      // одышка: бежать нельзя, пока шкала не дойдёт до 30
   effects: {},       // действующие плюшки: { energy: секунд осталось, shoes: ... }
 };
+const HP_MAX = 100;
+
+// Урон: всплывающее «−5» над героем и красная вспышка (рисуются в js/game.js).
+const damageFx = { flash: 0, popups: [] }; // popups: { text, x, y, time }
+function damagePlayer(amount) {
+  if (player.hp <= 0) return;
+  player.hp = Math.max(0, player.hp - amount);
+  damageFx.flash = 0.35;
+  damageFx.popups.push({ text: `−${amount}`, x: player.x, y: player.y, time: 1 });
+  if (player.hp === 0) caught(); // здоровье кончилось — поймали (js/police.js)
+}
 
 function updatePlayer(dt) {
   // Эффекты плюшек тикают и заканчиваются.
@@ -282,11 +294,22 @@ function drawPlayer(ctx, project) {
 
   // Руки качаются при ходьбе: вперёд-назад вдоль направления движения.
   const swing = player.moving ? Math.sin(player.step) * 0.22 : 0;
+  const punching = typeof combat !== 'undefined' && combat.punch > 0; // удар (js/combat.js)
+  const armed = typeof combat !== 'undefined' && combat.ammo > 0;    // есть пистолет
   ctx.fillStyle = '#e0b48c'; // кисти
   for (const [side, phase] of [[-1, 1], [1, -1]]) {
+    // Правая рука при ударе выброшена вперёд, с пистолетом — вытянута вперёд.
+    const forward = side === 1 && (punching || armed);
+    const hx = forward ? (punching ? 0.5 : 0.32) : swing * phase + 0.02;
+    const hy = forward ? 0.16 : side * 0.27;
     ctx.beginPath();
-    ctx.arc(swing * phase + 0.02, side * 0.27, 0.07, 0, Math.PI * 2);
+    ctx.arc(hx, hy, 0.07, 0, Math.PI * 2);
     ctx.fill();
+    if (forward && armed) {
+      ctx.fillStyle = '#222'; // пистолет в руке
+      ctx.fillRect(hx, hy - 0.035, 0.2, 0.07);
+      ctx.fillStyle = '#e0b48c';
+    }
   }
 
   // Плечи (куртка) — эллипс поперёк направления. При одышке плечи «ходят».

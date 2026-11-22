@@ -24,7 +24,7 @@ const runners = []; // водители угнанных машин, котор�
 function carToEnter() {
   let best = null, bestD = ENTER_DISTANCE;
   for (const c of cars) {
-    if (c.driver === 'player') continue;
+    if (c.driver === 'player' || c.police) continue; // полицейскую угнать нельзя
     const d = distToCar(c, player.x, player.y);
     if (d < bestD) { bestD = d; best = c; }
   }
@@ -253,8 +253,8 @@ function drawDrivingHud(ctx, canvas) {
   ctx.textAlign = 'center';
   if (player.inCar) {
     const kmh = Math.round(Math.hypot(player.inCar.vx, player.inCar.vy) * 3.6);
-    outlinedText(ctx, `🚗 ${kmh} км/ч`, w / 2, h - 90, 'bold 22px sans-serif', '#fff');
-    outlinedText(ctx, 'W/S — газ/тормоз · A/D — руль · Пробел — ручник · E — выйти', w / 2, h - 66, '13px sans-serif', '#ddd');
+    outlinedText(ctx, `🚗 ${kmh} км/ч`, w / 2, h - 124, 'bold 22px sans-serif', '#fff');
+    outlinedText(ctx, 'W/S — газ/тормоз · A/D — руль · Пробел — ручник · E — выйти', w / 2, h - 102, '13px sans-serif', '#ddd');
   } else if (carToEnter()) {
     outlinedText(ctx, 'E — сесть в машину', w / 2, h / 2 - 40, 'bold 18px sans-serif', '#fff');
   }

@@ -135,7 +135,8 @@ function mustYield(c) {
 function updateTraffic(dt) {
   for (const c of cars) {
     // Твоя машина (ведёшь ты — js/driving.js) и брошенные сами не ездят.
-    if (c.driver === 'player' || c.parked) continue;
+    // Полицейская в погоне едет по своим правилам (js/policecars.js).
+    if (c.driver === 'player' || c.parked || c.pursuit) continue;
     // Уступаем на перекрёстке — «препятствие» в точке остановки перед ним.
     let gap = obstacleAhead(c) - CAR_LENGTH;
     if (mustYield(c)) {
@@ -248,6 +249,17 @@ function drawCar(ctx, project, c) {
   ctx.beginPath(); ctx.roundRect(-1.35, -W + 0.22, 0.5, W * 2 - 0.44, 0.12); ctx.fill();
   ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
   ctx.beginPath(); ctx.roundRect(-0.85, -W + 0.2, 1.2, W * 2 - 0.4, 0.15); ctx.fill();
+  // Полиция: синяя полоса вдоль борта и мигалка на крыше (в погоне — сверкает).
+  if (c.police) {
+    ctx.fillStyle = '#1f4fa8';
+    ctx.fillRect(-L + 0.3, -W, L * 2 - 0.6, 0.22);
+    ctx.fillRect(-L + 0.3, W - 0.22, L * 2 - 0.6, 0.22);
+    const flash = c.pursuit ? Math.floor(performance.now() / 150) % 2 : -1;
+    for (const [side, on] of [[-1, flash === 0], [1, flash === 1]]) {
+      ctx.fillStyle = on ? '#5fb0ff' : '#1c3a6e';
+      ctx.fillRect(-0.45, side > 0 ? 0.02 : -0.37, 0.3, 0.35);
+    }
+  }
   // Фары и стоп-сигналы.
   ctx.fillStyle = '#fff6c0';
   ctx.fillRect(L - 0.12, -W + 0.15, 0.12, 0.4);
@@ -270,6 +282,16 @@ function drawCars(ctx, project) {
     ctx.roundRect(-CAR_LENGTH / 2, -CAR_WIDTH / 2, CAR_LENGTH, CAR_WIDTH, 0.45);
     ctx.fill();
     ctx.restore();
+    // Синее сияние мигалки вокруг полицейской машины в погоне.
+    if (c.pursuit && Math.floor(performance.now() / 150) % 2 === 0) {
+      const g = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, 8);
+      g.addColorStop(0, 'rgba(80, 160, 255, 0.45)');
+      g.addColorStop(1, 'rgba(80, 160, 255, 0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, 8, 0, Math.PI * 2);
+      ctx.fill();
+    }
     drawCar(ctx, project, c);
   }
 }
