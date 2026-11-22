@@ -96,6 +96,9 @@ window.VIEW = {
         ctx.stroke();
       }
     }
+
+    // Персонажи игры (игрок, позже полиция) — поверх карты.
+    if (window.GAME) window.GAME.draw(ctx, project);
   },
 };
 
