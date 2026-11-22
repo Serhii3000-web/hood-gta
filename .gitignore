@@ -1,0 +1,12 @@
+# зависимости
+node_modules/
+
+# сборка
+dist/
+
+# системный мусор
+.DS_Store
+Thumbs.db
+
+# секреты
+.env
